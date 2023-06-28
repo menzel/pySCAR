@@ -14,12 +14,6 @@ chrominfo_full = pd.read_csv("chrominfo", sep=" ")
 chrominfo_hg37 = chrominfo_full[chrominfo_full['genome'] == "hg37"][["chrom","centstart","centend"]]
 chrominfo = chrominfo_hg37
 
-global likescar
-likescar = False
-
-if len(sys.argv) > 2 and sys.argv[2] == "likescar":
-    likescar = True
-
 
 #################3
 
@@ -114,13 +108,10 @@ def calc_hrd(dat):
             if seqSamp.loc[dat['Chromosome'] == chrom]['B_cn'].sum() == 0:
                 seqSamp = seqSamp[seqSamp['Chromosome'] != chrom]
 
-        if likescar:
-            seqSamp = preprocess(seqSamp)
-            seqSamp = shrink(seqSamp)
-            seqSamp.loc[seqSamp["A_cn"] > 1,"A_cn"] = 1
-            seqSamp = shrink(seqSamp)
-        else:
-            seqSamp = preprocess(seqSamp)
+        seqSamp = preprocess(seqSamp)
+        seqSamp = shrink(seqSamp)
+        seqSamp.loc[seqSamp["A_cn"] > 1,"A_cn"] = 1
+        seqSamp = shrink(seqSamp)
 
 
 
@@ -142,8 +133,7 @@ def calc_tai(dat, minsize = 1e+06):
 
     dat = dat[dat["End_position"] - dat["Start_position"] > minsize]
 
-    if likescar:
-        dat = shrink(dat)
+    dat = shrink(dat)
 
 
     def calc_ai(row):
@@ -236,19 +226,18 @@ def calc_lst(dat):
             parm.iloc[-1,3] = chrominfo[chrominfo['chrom'] == chrom]['centstart']
 
 
-        if likescar:
 
-            #remove and shrink all intervals below 3e6
-            while len(parm[parm['End_position'] - parm['Start_position'] < 3e6]) > 0:
-                # only filter first 
-                parm = parm.drop(parm[parm['End_position'] - parm['Start_position'] < 3e6].index[0])
-                parm = shrink(parm)
+        #remove and shrink all intervals below 3e6
+        while len(parm[parm['End_position'] - parm['Start_position'] < 3e6]) > 0:
+            # only filter first 
+            parm = parm.drop(parm[parm['End_position'] - parm['Start_position'] < 3e6].index[0])
+            parm = shrink(parm)
 
-            while len(qarm[qarm['End_position'] - qarm['Start_position'] < 3e6]) > 0:
-                #tmp = qarm[~(qarm['End_position'] - qarm['Start_position'] < 3e6)]
+        while len(qarm[qarm['End_position'] - qarm['Start_position'] < 3e6]) > 0:
+            #tmp = qarm[~(qarm['End_position'] - qarm['Start_position'] < 3e6)]
 
-                qarm = qarm.drop(qarm[qarm['End_position'] - qarm['Start_position'] < 3e6].index[0])
-                qarm = shrink(qarm)
+            qarm = qarm.drop(qarm[qarm['End_position'] - qarm['Start_position'] < 3e6].index[0])
+            qarm = shrink(qarm)
 
 
         if len(parm) > 1:
