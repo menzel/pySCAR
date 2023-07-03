@@ -3,19 +3,30 @@
 import pandas as pd
 import sys
 
+##### Usage:
+## python pyscar.py segments.bed
+## segments.bed should look like this:
+## SampleID	Chromosome	Start_position	End_position	total_cn	A_cn	B_cn	ploidy
+## name chr1    761300	9526104	    4	2	2	1.39
+## name	chr1	9655101	29631382	1	1	0	1.39
+## ...
+#####
+
 pd.options.mode.chained_assignment = 'raise'
 
-global name
-name =sys.argv[1]
+name = sys.argv[1]
+
 copy_numbers = pd.read_csv(name, sep="\t")
-sizelimit = 15e+06
+
+if "contamination" in copy_numbers.index:
+    copy_numbers = copy_numbers.drop(["contamination"],axis=1)
 
 chrominfo_full = pd.read_csv("chrominfo", sep=" ")
 chrominfo_hg37 = chrominfo_full[chrominfo_full['genome'] == "hg37"][["chrom","centstart","centend"]]
 chrominfo = chrominfo_hg37
 
 
-#################3
+#################
 
 def preprocess(dat):
     unknown_chr = set(dat['Chromosome'].unique()) - set(["chr"+ str(c) for c in list(range(1,23))+['X','Y']])
@@ -26,9 +37,8 @@ def preprocess(dat):
 
     dat= dat[~dat.Chromosome.isin(["chr"+i for i in ['X','Y','x','y','23','24']])]
 
-    #if len(dat['SampleID'].unique()) > 1:
     if len(dat['SampleID'].unique()) > 1:
-        print("Multiple Patients in one file not implemented (yet!)")
+        print("Multiple Patients in one file not implemented")
         sys.exit(1)
 
 
@@ -69,7 +79,7 @@ def shrink_chrom(dat):
             tmp_sum = row['total_cn']
 
         else: 
-            tmp_sum += row['total_cn']
+            tmp_sum = row['total_cn']
             tmp_max = max(tmp_max, row['End_position'])
 
     new_dat.append([last['SampleID'],last['Chromosome'],tmp_start, tmp_max, tmp_sum, row['A_cn'], row['B_cn'], row['ploidy']])
@@ -88,35 +98,33 @@ def shrink(dat):
 
     new = []
 
-    for patient in dat['SampleID'].unique():
-        for chrom in dat['Chromosome'].unique():
-            shrunk = shrink_chrom(dat[(dat['Chromosome'] == chrom) & (dat['SampleID'] == patient)])
-            new.append(shrunk)
+    for chrom in dat['Chromosome'].unique():
+        shrunk = shrink_chrom(dat[dat['Chromosome'] == chrom])
+        new.append(shrunk)
 
     return pd.concat(new)
     
 
 
-def calc_hrd(dat):
+def calc_loh(dat, sizelimit=15e+06):
 
-    for patient in dat['SampleID'].unique():
-        seqSamp = dat.loc[dat['SampleID'] == patient]
+    seqSamp = dat
 
-        # remove chromsomes where all B_cn is 0 
-        # do not count loss of whole chromosome
-        for chrom in seqSamp['Chromosome'].unique():
-            if seqSamp.loc[dat['Chromosome'] == chrom]['B_cn'].sum() == 0:
-                seqSamp = seqSamp[seqSamp['Chromosome'] != chrom]
+    # remove chromsomes where all B_cn is 0 
+    # do not count loss of whole chromosome
+    for chrom in seqSamp['Chromosome'].unique():
+        if seqSamp.loc[dat['Chromosome'] == chrom]['B_cn'].sum() == 0:
+            seqSamp = seqSamp[seqSamp['Chromosome'] != chrom]
 
-        seqSamp = preprocess(seqSamp)
-        seqSamp = shrink(seqSamp)
-        seqSamp.loc[seqSamp["A_cn"] > 1,"A_cn"] = 1
-        seqSamp = shrink(seqSamp)
-
+    seqSamp = preprocess(seqSamp)
+    seqSamp = shrink(seqSamp)
+    seqSamp.loc[seqSamp["A_cn"] > 1,"A_cn"] = 1
+    seqSamp = shrink(seqSamp)
 
 
-        loh = seqSamp[(seqSamp["B_cn"] == 0) & (seqSamp["A_cn"] != 0)]
-        loh = loh[loh["End_position"] - loh["Start_position"] > sizelimit]
+
+    loh = seqSamp[(seqSamp["B_cn"] == 0) & (seqSamp["A_cn"] != 0)]
+    loh = loh[loh["End_position"] - loh["Start_position"] > sizelimit]
 
     #[print(name.split("/")[-1] + " " + x["Chromosome"] + " " + str(x["Start_position"]) + " " + str(x["End_position"])) for i,x in loh.iterrows()]
     
@@ -127,7 +135,6 @@ def calc_tai(dat, minsize = 1e+06):
 
     dat = preprocess(dat)
 
-
     ai = []
     events = {}
 
@@ -135,14 +142,13 @@ def calc_tai(dat, minsize = 1e+06):
 
     dat = shrink(dat)
 
-
     def calc_ai(row):
         if row['B_cn'] == row['A_cn']:
             return 0
         return 2
 
     def calc_ai_odd(row):
-        if row['B_cn'] + row['A_cn'] == ploidy and row['A_cn'] != ploidy:
+        if row['B_cn'] + row['A_cn'] == ploidy and row['B_cn'] != 0:
             return 0
         return 2
 
@@ -152,12 +158,11 @@ def calc_tai(dat, minsize = 1e+06):
 
         slice_c = dat[dat['Chromosome'] == chrom]
 
-        global ploidy
         ploidy = -1
         lengths = 0
 
-        for cnv in set(slice_c["A_cn"].unique())-set([0]):
-            cnv_slice = slice_c[slice_c["A_cn"] == cnv]
+        for cnv in set(slice_c["total_cn"].unique())-set([0]):
+            cnv_slice = slice_c[slice_c["total_cn"] == cnv]
 
             tmp = sum(cnv_slice["End_position"] - cnv_slice["Start_position"])
             if tmp > lengths:
@@ -172,16 +177,12 @@ def calc_tai(dat, minsize = 1e+06):
 
         slice_c = dat[dat['Chromosome'] == chrom]
 
-
         if len(slice_c) == 1 and slice_c.iloc[0]['AI'] != 0:
                 dat.iat[(dat['Chromosome'] == chrom).argmax(),8] = 3
         else:
             if slice_c.iloc[0]['AI'] == 2 and slice_c.iloc[0]['End_position'] < chrominfo[chrominfo['chrom'] == chrom]['centstart'].values[0]:
                 #argmax of truth series to select the first entry for that chrom
                 dat.iat[(dat['Chromosome'] == chrom).argmax(),8] = 1
-
-            #print(chrominfo)
-            #print(chrominfo[chrominfo['chrom'] == chrom]['centend'].values[0])
 
             if slice_c.iloc[-1]['AI'] == 2 and slice_c.iloc[-1]['Start_position'] > chrominfo[chrominfo['chrom'] == chrom]['centend'].values[0]:
                 dat.iat[len(dat) - 1 - ((dat['Chromosome'] == chrom).iloc[::-1].argmax()),8] = 1
@@ -190,10 +191,6 @@ def calc_tai(dat, minsize = 1e+06):
     events["Interstitial AI"] = len(dat[dat['AI'] == 2])
     events["Whole chr AI"] = len(dat[dat['AI'] == 3])
 
-
-    #print("TAI:")
-    #print(dat)
-    #print(dat[dat['AI'] == 1])
     return events["Telomeric AI"]
 
 
@@ -206,6 +203,7 @@ def calc_lst(dat):
     for chrom in dat['Chromosome'].unique():
 
         current = dat[dat['Chromosome'] == chrom]
+
         if len(current) < 2 :
             continue
 
@@ -261,17 +259,15 @@ def calc_lst(dat):
                 if current["lst"] and last["lst"] and current["Start_position"] - last["End_position"] < 3e6:
                     lst += 1
 
-        #print(chrom,lst)
-
     return lst
 
 
 #####################
 
-# call preprocess first here
 tai = calc_tai(copy_numbers)
-hrd = calc_hrd(copy_numbers)
+loh = calc_loh(copy_numbers)
 lst = calc_lst(copy_numbers)
 
-print("LOH TAI LST")
-print(hrd,tai,lst,end=" ")
+print("LOH\tTAI\tLST\tHRD")
+hrd=loh+tai+lst
+print(loh,tai,lst,hrd,end=" ",sep='\t')
